@@ -23,35 +23,6 @@ def format_time(seconds):
     return f"{secs}.{ms}s"
 
 
-def estimate_time(num_paragraphs, total_duration):
-    """Estimate total processing time based on input parameters."""
-    CHUNK_DURATION = 30
-    num_chunks = math.ceil(total_duration / CHUNK_DURATION)
-    # TTS: ~1s per paragraph (network I/O)
-    tts_time = num_paragraphs * 1.0
-    # Split video: instant (copy only) ~2s
-    split_time = 2.0
-    # Speed adjust: ~3s per segment with 2 workers
-    speed_time = num_paragraphs * 3.0 / 2
-    # Merge segments: instant (copy) ~1s
-    merge_time = 1.0
-    # Process chunks: ~8s per chunk with 2 workers
-    chunk_time = num_chunks * 8.0 / 2
-    # Final merge: instant ~1s
-    final_merge_time = 1.0
-    total = tts_time + split_time + speed_time + merge_time + chunk_time + final_merge_time
-    return total
-
-
-def format_estimate(total_seconds):
-    """Format estimated time for display."""
-    mins = int(total_seconds // 60)
-    secs = int(total_seconds % 60)
-    if mins > 0:
-        return f"~{mins}:{secs:02d}"
-    return f"~{secs}s"
-
-
 # ─────────────────────────────────────────────
 # TTS Voices, Recap Styles, and Emotions
 # ─────────────────────────────────────────────
@@ -456,14 +427,7 @@ def main():
             st.info(f"📊 Paragraphs: {len(paragraphs)} | Characters: {len(text_input)}")
         video_file = st.file_uploader("🎥 Upload Video", type=["mp4", "mov", "avi"])
 
-        # ── Show estimated time before processing ──
-        if video_file and text_input:
-            video_file.seek(0, os.SEEK_END)
-            # Can't probe without saving first, so estimate based on paragraphs
-            num_paras = len(count_paragraphs(text_input))
-            rough_duration = num_paras * 25  # rough estimate: ~25s per paragraph
-            est = estimate_time(num_paras, rough_duration)
-            st.info(f"⏱️ Estimated: {format_estimate(est)}")
+
 
     if st.button("🚀 Start Processing"):
         if not text_input or not video_file:
@@ -494,9 +458,7 @@ def main():
         num_paragraphs = len(paragraphs)
         progress_bar = st.progress(0)
 
-        # Get actual video duration for accurate estimate
-        actual_duration = get_video_duration(video_path)
-        estimated_total = estimate_time(num_paragraphs, actual_duration)
+        # Free RAM (no video probe needed)
 
         # Free RAM
         del video_file
@@ -637,7 +599,7 @@ def main():
 
         # ── Final timer summary ──
         total_elapsed = time.time() - total_start
-        st.success(f"🎉 Completed in **{format_time(total_elapsed)}** (Estimated: {format_estimate(estimated_total)})")
+        st.success(f"🎉 Completed in **{format_time(total_elapsed)}**")
 
         # Download button
         if os.path.exists(output_video):
