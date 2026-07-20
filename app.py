@@ -498,7 +498,7 @@ def main():
             step_start = time.time()
             st.write("⚡ Speed-adjusting segments to match TTS audio...")
             adjusted_segments = [None] * num_paragraphs
-            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
                 futures = {
                     executor.submit(
                         speed_adjust_segment,
