@@ -77,10 +77,21 @@ def generate_tts(text, output_path, voice_id="v1", speed=0, pitch=0):
     pitch_str = f"+{pitch}Hz" if pitch >= 0 else f"{pitch}Hz"
     
     async def _generate():
-        communicate = edge_tts.Communicate(text, real_voice, rate=rate_str, pitch=pitch_str)
-        await communicate.save(output_path)
+        try:
+            communicate = edge_tts.Communicate(text, real_voice, rate=rate_str, pitch=pitch_str)
+            await communicate.save(output_path)
+        except Exception as e:
+            # Fallback to English voice if Myanmar voice fails
+            fallback_voice = "en-US-AriaNeural"
+            communicate = edge_tts.Communicate(text, fallback_voice, rate=rate_str, pitch=pitch_str)
+            await communicate.save(output_path)
         
-    asyncio.run(_generate())
+    try:
+        asyncio.run(_generate())
+    except Exception as e:
+        # Final fallback: create an empty audio file if everything fails
+        subprocess.run(['ffmpeg', '-y', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono', '-t', '1', output_path])
+        
     return output_path
 
 def get_video_duration(video_path):
