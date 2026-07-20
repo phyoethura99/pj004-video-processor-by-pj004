@@ -8,6 +8,8 @@ import edge_tts
 import time
 import shutil
 import gc
+import threading
+
 
 # ─────────────────────────────────────────────
 # Timer Utility
@@ -21,6 +23,41 @@ def format_time(seconds):
     if mins > 0:
         return f"{mins}:{secs:02d}"
     return f"{secs}.{ms}s"
+
+
+# ─────────────────────────────────────────────
+# Real-time Timer Thread
+# ─────────────────────────────────────────────
+
+class LiveTimer:
+    """Background timer that updates a Streamlit placeholder in real-time."""
+
+    def __init__(self, placeholder, total_placeholder=None):
+        self._stop_event = threading.Event()
+        self._start_time = 0
+        self._placeholder = placeholder
+        self._total_placeholder = total_placeholder
+        self._thread = None
+
+    def start(self):
+        self._start_time = time.time()
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+
+    def elapsed(self):
+        return time.time() - self._start_time
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            elapsed = time.time() - self._start_time
+            self._placeholder.markdown(f"⏱️ **Elapsed: {format_time(elapsed)}**")
+            self._stop_event.wait(1.0)
 
 
 # ─────────────────────────────────────────────
@@ -394,9 +431,6 @@ def merge_videos(video_list, output_path):
 def main():
     st.title("🎬 Video & Text Processor with TTS")
 
-    # ── Estimated time display (sidebar) ──
-    est_placeholder = None
-
     with st.sidebar:
         st.header("⚙️ Settings")
         selected_voice = st.selectbox("Select Voice", options=[v["name"] for v in VOICES])
@@ -427,8 +461,6 @@ def main():
             st.info(f"📊 Paragraphs: {len(paragraphs)} | Characters: {len(text_input)}")
         video_file = st.file_uploader("🎥 Upload Video", type=["mp4", "mov", "avi"])
 
-
-
     if st.button("🚀 Start Processing"):
         if not text_input or not video_file:
             st.error("❌ Provide text and video.")
@@ -456,9 +488,11 @@ def main():
 
         paragraphs = count_paragraphs(text_input)
         num_paragraphs = len(paragraphs)
-        progress_bar = st.progress(0)
 
-        # Free RAM (no video probe needed)
+        # ── Timer placeholders ──
+        timer_placeholder = st.empty()
+        progress_bar = st.progress(0)
+        step_status_placeholder = st.empty()
 
         # Free RAM
         del video_file
@@ -467,81 +501,96 @@ def main():
         # Timer tracking
         total_start = time.time()
 
-        with st.status("🚀 Processing...", expanded=True) as status:
+        # Start live timer
+        live_timer = LiveTimer(timer_placeholder)
+        live_timer.start()
 
-            # ── Step 1+2: TTS + Split Video (PARALLEL) ──
-            step_start = time.time()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                tts_future = executor.submit(
-                    lambda: asyncio.run(
-                        generate_all_tts(paragraphs, audio_dir, voice_id,
-                                         final_speed, final_pitch)
+        try:
+            with st.status("🚀 Processing...", expanded=True) as status:
+
+                # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                # STEP 1+2: TTS + Split Video (PARALLEL)
+                # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                step_status_placeholder.markdown("**Step 1/5:** Generating TTS audio & splitting video...")
+                step_start = time.time()
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                    tts_future = executor.submit(
+                        lambda: asyncio.run(
+                            generate_all_tts(paragraphs, audio_dir, voice_id,
+                                             final_speed, final_pitch)
+                        )
                     )
-                )
-                split_future = executor.submit(
-                    split_video, video_path, num_paragraphs, video_dir
-                )
-                tts_future.result()
-                st.write("✅ TTS generation complete.")
-                video_segments, _ = split_future.result()
-                st.write(f"✅ Split into {num_paragraphs} segments.")
+                    split_future = executor.submit(
+                        split_video, video_path, num_paragraphs, video_dir
+                    )
+                    tts_future.result()
+                    video_segments, _ = split_future.result()
 
-            step12_elapsed = time.time() - step_start
-            st.write(f"⏱️ TTS + Split: {format_time(step12_elapsed)}")
+                step12_elapsed = time.time() - step_start
+                progress_bar.progress(0.15)
 
-            # Delete original uploaded video
-            if os.path.exists(video_path):
-                os.remove(video_path)
-                st.write("🗑️ Original video removed.")
+                # Delete original uploaded video
+                if os.path.exists(video_path):
+                    os.remove(video_path)
 
-            # ── Step 3: Speed-adjust each segment ──
-            step_start = time.time()
-            st.write("⚡ Speed-adjusting segments to match TTS audio...")
-            adjusted_segments = [None] * num_paragraphs
-            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-                futures = {
-                    executor.submit(
-                        speed_adjust_segment,
-                        i, video_segments[i],
-                        os.path.join(audio_dir, f"audio_{i}.mp3"),
-                        adjusted_dir
-                    ): i for i in range(num_paragraphs)
-                }
-                for future in concurrent.futures.as_completed(futures):
-                    idx = futures[future]
-                    try:
-                        adjusted_segments[idx] = future.result()
-                        st.write(f"✅ Segment {idx+1}/{num_paragraphs} speed-adjusted")
-                        progress_bar.progress((idx + 1) / num_paragraphs / 4)
-                    except Exception as e:
-                        st.error(f"❌ Speed adjust failed for segment {idx+1}: {e}")
-            gc.collect()
-            step3_elapsed = time.time() - step_start
-            st.write(f"✅ All segments speed-adjusted. ({format_time(step3_elapsed)})")
+                st.write("✅ TTS + Split complete.")
 
-            # ── Step 4: Merge all speed-adjusted segments ──
-            step_start = time.time()
-            st.write("🔗 Merging speed-adjusted segments...")
-            merged_video = os.path.join(temp_dir, "merged_video.mp4")
-            merge_speed_adjusted_segments(adjusted_segments, merged_video)
-            step4_elapsed = time.time() - step_start
-            st.write(f"✅ Segments merged. ({format_time(step4_elapsed)})")
-            gc.collect()
+                # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                # STEP 3: Speed-adjust each segment
+                # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                step_status_placeholder.markdown(
+                    f"**Step 2/5:** Speed-adjusting {num_paragraphs} segments...")
+                step_start = time.time()
+                adjusted_segments = [None] * num_paragraphs
+                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                    futures = {
+                        executor.submit(
+                            speed_adjust_segment,
+                            i, video_segments[i],
+                            os.path.join(audio_dir, f"audio_{i}.mp3"),
+                            adjusted_dir
+                        ): i for i in range(num_paragraphs)
+                    }
+                    for future in concurrent.futures.as_completed(futures):
+                        idx = futures[future]
+                        try:
+                            adjusted_segments[idx] = future.result()
+                        except Exception as e:
+                            st.error(f"❌ Speed adjust failed for segment {idx+1}: {e}")
+                        # Update progress
+                        done = sum(1 for x in adjusted_segments if x is not None)
+                        progress_bar.progress(0.15 + 0.30 * done / num_paragraphs)
 
-            # ── Step 5+6: Split into chunks + Process (PIPELINE) ──
-            CHUNK_DURATION = 30
-            merged_duration = get_video_duration(merged_video)
-            num_chunks = math.ceil(merged_duration / CHUNK_DURATION)
-            st.write(f"🧩 Processing {num_chunks} chunks...")
+                gc.collect()
+                step3_elapsed = time.time() - step_start
+                st.write(f"✅ All {num_paragraphs} segments speed-adjusted.")
 
-            processed_chunks = [None] * num_chunks
-            completed_chunks = 0
-            step56_start = time.time()
+                # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                # STEP 4: Merge all speed-adjusted segments
+                # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                step_status_placeholder.markdown("**Step 3/5:** Merging segments...")
+                step_start = time.time()
+                merged_video = os.path.join(temp_dir, "merged_video.mp4")
+                merge_speed_adjusted_segments(adjusted_segments, merged_video)
+                progress_bar.progress(0.50)
+                st.write("✅ Segments merged.")
+                gc.collect()
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                # Split all chunks first (instant copy), then process in parallel
-                chunk_paths = []
-                chunk_durations = []
+                # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                # STEP 5: Split into chunks + Process
+                # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                CHUNK_DURATION = 30
+                merged_duration = get_video_duration(merged_video)
+                num_chunks = math.ceil(merged_duration / CHUNK_DURATION)
+
+                step_status_placeholder.markdown(
+                    f"**Step 4/5:** Processing {num_chunks} chunks with effects...")
+                step56_start = time.time()
+
+                processed_chunks = [None] * num_chunks
+
+                # Split all chunks first (instant copy)
                 for i in range(num_chunks):
                     start_time = i * CHUNK_DURATION
                     remaining = min(CHUNK_DURATION, merged_duration - start_time)
@@ -550,54 +599,68 @@ def main():
                            '-i', merged_video, '-c:v', 'copy', '-c:a', 'copy',
                            '-avoid_negative_ts', 'make_zero', chunk_path]
                     subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    chunk_paths.append(chunk_path)
-                    chunk_durations.append(remaining)
 
-                st.write(f"✅ Split into {num_chunks} chunks ({CHUNK_DURATION}s each).")
+                st.write(f"✅ Split into {num_chunks} chunks.")
 
-                # Process chunks in parallel (2 workers)
-                futures = {
-                    executor.submit(
-                        process_chunk_with_retry,
-                        i, chunk_paths[i], chunk_durations[i],
-                        final_dir,
-                        play_duration, freeze1_duration, freeze2_duration,
-                        freeze1_zoom, freeze2_zoom
-                    ): i for i in range(num_chunks)
-                }
-                for future in concurrent.futures.as_completed(futures):
-                    idx = futures[future]
-                    try:
-                        processed_chunks[idx] = future.result()
-                        completed_chunks += 1
-                        st.write(f"✅ Chunk {idx+1}/{num_chunks} processed")
-                        progress_bar.progress(
-                            0.5 + 0.5 * completed_chunks / num_chunks)
-                    except Exception as e:
-                        st.error(f"❌ Chunk {idx+1} failed: {e}")
-            gc.collect()
-            step56_elapsed = time.time() - step56_start
-            st.write(f"✅ All chunks processed. ({format_time(step56_elapsed)})")
+                # Process chunks (1 worker for RAM safety)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    futures = {
+                        executor.submit(
+                            process_chunk_with_retry,
+                            i, os.path.join(chunks_dir, f"chunk_{i}.mp4"),
+                            min(CHUNK_DURATION, merged_duration - i * CHUNK_DURATION),
+                            final_dir,
+                            play_duration, freeze1_duration, freeze2_duration,
+                            freeze1_zoom, freeze2_zoom
+                        ): i for i in range(num_chunks)
+                    }
+                    for future in concurrent.futures.as_completed(futures):
+                        idx = futures[future]
+                        try:
+                            processed_chunks[idx] = future.result()
+                        except Exception as e:
+                            st.error(f"❌ Chunk {idx+1} failed: {e}")
+                        # Update progress
+                        done = sum(1 for x in processed_chunks if x is not None)
+                        progress_bar.progress(0.50 + 0.40 * done / num_chunks)
 
-            # Cleanup merged video
-            if os.path.exists(merged_video):
-                os.remove(merged_video)
+                gc.collect()
+                st.write(f"✅ All {num_chunks} chunks processed.")
 
-            # ── Step 7: Merge processed chunks into final video ──
-            step_start = time.time()
-            st.write("🎞️ Merging final video...")
-            output_video = "final_output.mp4"
-            try:
-                merge_videos(processed_chunks, output_video)
-                step7_elapsed = time.time() - step_start
-                status.update(label="✅ Complete!", state="complete")
-            except Exception as e:
-                st.error(f"❌ Final merge failed: {e}")
-                status.update(label="❌ Failed", state="error")
-                return
+                # Cleanup merged video
+                if os.path.exists(merged_video):
+                    os.remove(merged_video)
+
+                # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                # STEP 6: Merge processed chunks
+                # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                step_status_placeholder.markdown("**Step 5/5:** Merging final video...")
+                step_start = time.time()
+                output_video = "final_output.mp4"
+                try:
+                    merge_videos(processed_chunks, output_video)
+                    progress_bar.progress(1.0)
+                    status.update(label="✅ Complete!", state="complete")
+                except Exception as e:
+                    st.error(f"❌ Final merge failed: {e}")
+                    status.update(label="❌ Failed", state="error")
+                    live_timer.stop()
+                    return
+
+                st.write("✅ Final video merged.")
+
+        except Exception as e:
+            st.error(f"❌ Processing failed: {e}")
+            live_timer.stop()
+            return
+
+        # ── Stop live timer ──
+        live_timer.stop()
 
         # ── Final timer summary ──
         total_elapsed = time.time() - total_start
+        timer_placeholder.markdown(f"⏱️ **Total: {format_time(total_elapsed)}**")
+        step_status_placeholder.markdown("**✅ All steps complete!**")
         st.success(f"🎉 Completed in **{format_time(total_elapsed)}**")
 
         # Download button
