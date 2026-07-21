@@ -229,13 +229,20 @@ def speed_adjust_segment(index, video_segment, audio_path, adjusted_dir):
     orig_duration = get_video_duration(video_segment)
     output_path = os.path.join(adjusted_dir, f"adjusted_{index}.mp4")
 
-    # Target video duration is audio_duration + 0.3s padding
-    # to ensure audio is never truncated.
-    target_video_duration = audio_duration + 0.3
+    # Target video duration is rounded up to the nearest 0.5s increment
+    # relative to the audio duration (ensuring a buffer of 0 to 0.5s).
+    # This prevents audio truncation while keeping the buffer small.
+    target_video_duration = math.ceil(audio_duration * 2) / 2
+    
+    # Ensure the video is at least as long as the audio (handle float precision)
+    if target_video_duration < audio_duration:
+        target_video_duration = audio_duration
+        
     speed_factor = target_video_duration / orig_duration
 
     # Use a simpler filter complex that only touches video PTS.
-    # We map audio directly to ensure it's not filtered or truncated.
+    # We map audio directly (1:a) to ensure the TTS audio duration is strictly preserved.
+    # We do NOT use -shortest because we want the video to be slightly longer (0-0.5s) than the audio.
     cmd = [
         'ffmpeg', '-y',
         '-i', video_segment,
