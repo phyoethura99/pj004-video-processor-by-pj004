@@ -25,39 +25,7 @@ def format_time(seconds):
     return f"{secs}.{ms}s"
 
 
-# ─────────────────────────────────────────────
-# Real-time Timer Thread
-# ─────────────────────────────────────────────
-
-class LiveTimer:
-    """Background timer that updates a Streamlit placeholder in real-time."""
-
-    def __init__(self, placeholder, total_placeholder=None):
-        self._stop_event = threading.Event()
-        self._start_time = 0
-        self._placeholder = placeholder
-        self._total_placeholder = total_placeholder
-        self._thread = None
-
-    def start(self):
-        self._start_time = time.time()
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        self._stop_event.set()
-        if self._thread:
-            self._thread.join(timeout=2)
-
-    def elapsed(self):
-        return time.time() - self._start_time
-
-    def _run(self):
-        while not self._stop_event.is_set():
-            elapsed = time.time() - self._start_time
-            self._placeholder.markdown(f"⏱️ **Elapsed: {format_time(elapsed)}**")
-            self._stop_event.wait(1.0)
+# Real-time Timer Thread Removed to prevent NoSessionContext errors.
 
 
 # ─────────────────────────────────────────────
@@ -182,9 +150,6 @@ def get_video_resolution(video_path):
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     res = result.stdout.strip().split('x')
     w, h = int(res[0]), int(res[1])
-    if w > 1920:
-        h = int(h * (1920 / w))
-        w = 1920
     return w, h
 
 
@@ -314,9 +279,9 @@ def build_cycle_filter(video_path, audio_path, chunk_duration,
     cycle_duration = play_dur + freeze1_dur + freeze2_dur
     num_cycles = math.ceil(chunk_duration / cycle_duration)
 
-    # Video is already pre-processed to 1280x720 24fps
-    width, height = 1280, 720
-    res_str = "1280x720"
+    # Use original resolution
+    width, height = get_video_resolution(video_path)
+    res_str = f"{width}x{height}"
 
     def make_zoom_filter(zoom_dur, total_dur, zoom_type):
         total_frames = max(int(total_dur * fps), 1)
@@ -529,9 +494,7 @@ def main():
         # Timer tracking
         total_start = time.time()
 
-        # Start live timer
-        live_timer = LiveTimer(timer_placeholder)
-        live_timer.start()
+        # LiveTimer removed to prevent NoSessionContext errors.
 
         try:
             with st.status("🚀 Processing...", expanded=True) as status:
@@ -543,10 +506,10 @@ def main():
                 progress_detail = st.empty()
                 step_start = time.time()
 
-                # Pre-process video to 720p 24fps for optimization
-                optimized_video_path = os.path.join(video_dir, "optimized_720p_24fps.mp4")
-                progress_detail.markdown("⚙️ Optimizing video to 720p 24fps...")
-                cmd = ['ffmpeg', '-y', '-i', video_path, '-vf', 'scale=1280:720', '-r', '24', 
+                # Pre-process video to 24fps for optimization (keeping original resolution)
+                optimized_video_path = os.path.join(video_dir, "optimized_original_res_24fps.mp4")
+                progress_detail.markdown("⚙️ Optimizing video to 24fps (Original Resolution)...")
+                cmd = ['ffmpeg', '-y', '-i', video_path, '-r', '24', 
                        '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', optimized_video_path]
                 subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 
@@ -688,18 +651,13 @@ def main():
                 except Exception as e:
                     st.error(f"❌ Final merge failed: {e}")
                     status.update(label="❌ Failed", state="error")
-                    live_timer.stop()
                     return
 
                 st.write("✅ Final video merged.")
 
         except Exception as e:
             st.error(f"❌ Processing failed: {e}")
-            live_timer.stop()
             return
-
-        # ── Stop live timer ──
-        live_timer.stop()
 
         # ── Final timer summary ──
         total_elapsed = time.time() - total_start
