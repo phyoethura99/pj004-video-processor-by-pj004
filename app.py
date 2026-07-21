@@ -506,13 +506,24 @@ def main():
                 progress_detail = st.empty()
                 step_start = time.time()
 
-                # Pre-process video to 24fps for optimization (keeping original resolution)
-                optimized_video_path = os.path.join(video_dir, "optimized_original_res_24fps.mp4")
-                progress_detail.markdown("⚙️ Optimizing video to 24fps (Original Resolution)...")
-                cmd = ['ffmpeg', '-y', '-i', video_path, '-r', '24', 
-                       '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', optimized_video_path]
-                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                
+                # Pre-process video: cap at 900p, convert to 24fps
+                # Check video resolution first
+                orig_width, orig_height = get_video_resolution(video_path)
+                needs_preprocess = (orig_width > 1600) or (orig_height > 900)
+
+                if needs_preprocess:
+                    optimized_video_path = os.path.join(video_dir, "optimized_900p_24fps.mp4")
+                    progress_detail.markdown(f"⚙️ Downscaling to 900p + 24fps (Original: {orig_width}×{orig_height})...")
+                    cmd = ['ffmpeg', '-y', '-i', video_path, '-vf', 'scale=w=1600:h=-2',
+                           '-r', '24', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', optimized_video_path]
+                    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                else:
+                    optimized_video_path = os.path.join(video_dir, "optimized_24fps.mp4")
+                    progress_detail.markdown(f"⚙️ Converting to 24fps (Resolution: {orig_width}×{orig_height})...")
+                    cmd = ['ffmpeg', '-y', '-i', video_path, '-r', '24',
+                           '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', optimized_video_path]
+                    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
                 # Delete original high-res video immediately to save space/RAM
                 if os.path.exists(video_path):
                     os.remove(video_path)
