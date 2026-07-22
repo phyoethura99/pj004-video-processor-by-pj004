@@ -273,7 +273,7 @@ def split_single_chunk(index, merged_path, chunk_duration, total_duration, outpu
 
 def build_cycle_filter(video_path, audio_path, chunk_duration,
                        play_dur, freeze1_dur, freeze2_dur,
-                       freeze1_zoom, freeze2_zoom, zoom_dur):
+                       freeze1_zoom, freeze2_zoom, zoom1_dur, zoom2_dur):
     """Build FFmpeg filter complex for cycle repeat on a chunk."""
     fps = 24
     cycle_duration = play_dur + freeze1_dur + freeze2_dur
@@ -299,8 +299,8 @@ def build_cycle_filter(video_path, audio_path, chunk_duration,
                     f"d={total_frames}:s={res_str}:fps={fps}")
         return None
 
-    f1_z = make_zoom_filter(zoom_dur, freeze1_dur, freeze1_zoom) if freeze1_zoom != "None" else None
-    f2_z = make_zoom_filter(zoom_dur, freeze2_dur, freeze2_zoom) if freeze2_zoom != "None" else None
+    f1_z = make_zoom_filter(zoom1_dur, freeze1_dur, freeze1_zoom) if freeze1_zoom != "None" else None
+    f2_z = make_zoom_filter(zoom2_dur, freeze2_dur, freeze2_zoom) if freeze2_zoom != "None" else None
 
     filter_parts = []
     concat_inputs = []
@@ -352,7 +352,7 @@ def build_cycle_filter(video_path, audio_path, chunk_duration,
 def process_chunk_with_retry(index, chunk_path, chunk_duration,
                              final_dir,
                              play_dur, freeze1_dur, freeze2_dur,
-                             freeze1_zoom, freeze2_zoom, zoom_dur,
+                             freeze1_zoom, freeze2_zoom, zoom1_dur, zoom2_dur,
                              max_retries=3):
     """Process a single chunk with cycle repeat and zoom effects."""
     audio_path = os.path.join(final_dir, f"chunk_audio_{index}.mp3")
@@ -366,7 +366,7 @@ def process_chunk_with_retry(index, chunk_path, chunk_duration,
             filter_complex = build_cycle_filter(
                 chunk_path, audio_path, chunk_duration,
                 play_dur, freeze1_dur, freeze2_dur,
-                freeze1_zoom, freeze2_zoom, zoom_dur
+                freeze1_zoom, freeze2_zoom, zoom1_dur, zoom2_dur
             )
 
             # Map both the filtered video [v] and the original audio (1:a)
@@ -434,9 +434,42 @@ def main():
         with col2:
             selected_emotion = st.selectbox("Emotion", options=[e["name"] for e in EMOTIONS])
             emotion_data = next(e for e in EMOTIONS if e["name"] == selected_emotion)
-        final_speed, final_pitch = (style_data["speed"] + emotion_data["s"],
-                                    style_data["pitch"] + emotion_data["p"])
-        st.caption(f"📊 Speed: {final_speed}%, Pitch: {final_pitch}Hz")
+
+        st.markdown("---")
+        # Initialize session state for manual adjustments
+        if "manual_speed" not in st.session_state:
+            st.session_state.manual_speed = 0
+        if "manual_pitch" not in st.session_state:
+            st.session_state.manual_pitch = 0
+
+        # Speed Adjustment with Buttons
+        st.write("⚡ **Manual Speed Adjust (%)**")
+        col_s1, col_s2, col_s3 = st.columns([1, 3, 1])
+        with col_s1:
+            if st.button("-5", key="s_minus"):
+                st.session_state.manual_speed = max(-100, st.session_state.manual_speed - 5)
+        with col_s2:
+            st.session_state.manual_speed = st.slider("Speed", -100, 100, st.session_state.manual_speed, label_visibility="collapsed", key="speed_slider")
+        with col_s3:
+            if st.button("+5", key="s_plus"):
+                st.session_state.manual_speed = min(100, st.session_state.manual_speed + 5)
+
+        # Pitch Adjustment with Buttons
+        st.write("🎵 **Manual Pitch Adjust (Hz)**")
+        col_p1, col_p2, col_p3 = st.columns([1, 3, 1])
+        with col_p1:
+            if st.button("-5", key="p_minus"):
+                st.session_state.manual_pitch = max(-100, st.session_state.manual_pitch - 5)
+        with col_p2:
+            st.session_state.manual_pitch = st.slider("Pitch", -100, 100, st.session_state.manual_pitch, label_visibility="collapsed", key="pitch_slider")
+        with col_p3:
+            if st.button("+5", key="p_plus"):
+                st.session_state.manual_pitch = min(100, st.session_state.manual_pitch + 5)
+
+        final_speed = style_data["speed"] + emotion_data["s"] + st.session_state.manual_speed
+        final_pitch = style_data["pitch"] + emotion_data["p"] + st.session_state.manual_pitch
+        
+        st.info(f"📊 Total Speed: {final_speed}% | Total Pitch: {final_pitch}Hz")
         st.markdown("---")
         play_duration = st.slider("▶️ Play Duration (s)", 1, 5, 3)
         col3, col4 = st.columns(2)
@@ -446,7 +479,11 @@ def main():
         with col4:
             freeze2_duration = st.slider("❄️ Freeze 2 (s)", 0, 2, 1)
             freeze2_zoom = st.selectbox("Zoom 2", ["None", "Zoom In", "Zoom Out"])
-        zoom_duration = st.slider("🔍 Zoom Duration (s)", 0.1, 1.0, 0.5)
+        col_z1, col_z2 = st.columns(2)
+        with col_z1:
+            zoom1_duration = st.slider("🔍 Zoom 1 Duration (s)", 0.1, 1.0, 0.5)
+        with col_z2:
+            zoom2_duration = st.slider("🔍 Zoom 2 Duration (s)", 0.1, 1.0, 0.5)
         st.markdown("---")
         text_input = st.text_area("📝 Enter Text", height=200)
         if text_input:
@@ -624,7 +661,7 @@ def main():
                             min(CHUNK_DURATION, merged_duration - i * CHUNK_DURATION),
                             final_dir,
                             play_duration, freeze1_duration, freeze2_duration,
-                            freeze1_zoom, freeze2_zoom, zoom_duration
+                            freeze1_zoom, freeze2_zoom, zoom1_duration, zoom2_duration
                         ): i for i in range(num_chunks)
                     }
                     for future in concurrent.futures.as_completed(futures):
