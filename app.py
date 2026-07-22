@@ -206,17 +206,14 @@ def speed_adjust_segment(index, video_segment, audio_path, adjusted_dir):
     speed_factor = target_video_duration / orig_duration
 
     # Use a simpler filter complex that only touches video PTS.
-    # We map audio directly (1:a) to ensure the TTS audio duration is strictly preserved.
-    # We do NOT use -shortest because we want the video to be slightly longer (0-0.5s) than the audio.
+    # We output SILENT video that exactly matches the TTS audio duration.
+    # Audio will be added back in the final step to prevent overlapping/doubling.
     cmd = [
         'ffmpeg', '-y',
         '-i', video_segment,
-        '-i', audio_path,
-        '-filter_complex', f"[0:v]setpts={speed_factor}*PTS[v]",
-        '-map', '[v]',
-        '-map', '1:a',
+        '-vf', f"setpts={speed_factor}*PTS",
+        '-an',
         '-c:v', 'libx264', '-preset', 'ultrafast',
-        '-c:a', 'aac',
         output_path
     ]
 
