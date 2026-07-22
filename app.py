@@ -346,40 +346,33 @@ def build_cycle_filter(video_path, audio_path, chunk_duration,
     return ''.join(filter_parts)
 
 
-def process_chunk_with_retry(index, chunk_path, chunk_duration,
-                             final_dir,
+def process_chunk_with_retry(index, chunk_path, chunk_duration, final_dir,
                              play_dur, freeze1_dur, freeze2_dur,
                              freeze1_zoom, freeze2_zoom, zoom1_dur, zoom2_dur,
                              max_retries=3):
-    """Process a single chunk with cycle repeat and zoom effects."""
-    audio_path = os.path.join(final_dir, f"chunk_audio_{index}.mp3")
-    cmd = ['ffmpeg', '-y', '-i', chunk_path, '-vn', '-acodec', 'libmp3lame',
-           '-ab', '128k', audio_path]
-    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
+    """Process a single chunk with cycle repeat and zoom effects (SILENT)."""
+    # We no longer extract or use audio here to prevent doubling.
     for attempt in range(max_retries):
         try:
             output_path = os.path.join(final_dir, f"chunk_processed_{index}.mp4")
             filter_complex = build_cycle_filter(
-                chunk_path, audio_path, chunk_duration,
+                chunk_path, None, chunk_duration,
                 play_dur, freeze1_dur, freeze2_dur,
                 freeze1_zoom, freeze2_zoom, zoom1_dur, zoom2_dur
             )
 
-            # Map both the filtered video [v] and the original audio (1:a)
-            cmd = ['ffmpeg', '-y', '-i', chunk_path, '-i', audio_path,
+            # Process video only (-an)
+            cmd = ['ffmpeg', '-y', '-i', chunk_path,
                    '-filter_complex', filter_complex, 
-                   '-map', '[v]', '-map', '1:a',
-                   '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac',
-                   '-shortest', output_path]
+                   '-map', '[v]', '-an',
+                   '-c:v', 'libx264', '-preset', 'ultrafast',
+                   output_path]
             result = subprocess.run(cmd, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True)
 
             if result.returncode == 0 and os.path.exists(output_path):
                 if os.path.exists(chunk_path):
                     os.remove(chunk_path)
-                if os.path.exists(audio_path):
-                    os.remove(audio_path)
                 return output_path
             else:
                 raise Exception(f"FFmpeg failed: {result.stderr}")
