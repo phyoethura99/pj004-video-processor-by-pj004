@@ -674,24 +674,46 @@ def main():
                     os.remove(merged_video)
 
                 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                # STEP 6: Merge processed chunks
+                # STEP 6: Merge & Sync Audio
                 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                step_status_placeholder.markdown("**Step 5/5:** Merging final video...")
-                progress_detail.markdown("🔗 Merging final video...")
+                step_status_placeholder.markdown("**Step 5/5:** Merging & Syncing Audio...")
+                progress_detail.markdown("🔗 Merging final video chunks...")
                 step_start = time.time()
+                
+                final_silent_video = "final_silent_output.mp4"
+                final_audio = "final_tts_audio.mp3"
                 output_video = "final_output.mp4"
+                
                 try:
-                    merge_videos(processed_chunks, output_video)
+                    # 1. Merge silent video chunks
+                    merge_videos(processed_chunks, final_silent_video)
+                    
+                    # 2. Merge all TTS audios
+                    progress_detail.markdown("🎵 Merging all TTS audios...")
+                    merge_audios(audio_files, final_audio)
+                    
+                    # 3. Final Sync: Silent Video + Full TTS Audio
+                    progress_detail.markdown("🔄 Syncing audio and video...")
+                    cmd_sync = ['ffmpeg', '-y', '-i', final_silent_video, '-i', final_audio,
+                                '-c:v', 'copy', '-c:a', 'aac', '-shortest', output_video]
+                    subprocess.run(cmd_sync, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    
                     progress_bar.progress(1.0)
                     step6_elapsed = time.time() - step_start
-                    progress_detail.markdown(f"✅ Final video merged ({step6_elapsed:.1f}s)")
+                    progress_detail.markdown(f"✅ Final video merged & synced ({step6_elapsed:.1f}s)")
                     status.update(label="✅ Complete!", state="complete")
+                    
+                    # Cleanup temporary final files
+                    for tmp in [final_silent_video, final_audio]:
+                        if os.path.exists(tmp):
+                            os.remove(tmp)
+                            
                 except Exception as e:
-                    st.error(f"❌ Final merge failed: {e}")
+                    st.error(f"❌ Final merge/sync failed: {e}")
                     status.update(label="❌ Failed", state="error")
                     return
 
-                st.write("✅ Final video merged.")
+                st.write("✅ Final video merged and synced.")
 
         except Exception as e:
             st.error(f"❌ Processing failed: {e}")
